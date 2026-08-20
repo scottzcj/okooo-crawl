@@ -1,0 +1,24 @@
+name: crawl-ucl
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install curl_cffi
+      - name: 抓取欧冠数据
+        run: python gh_crawl_ucl.py
+      - name: 提交结果回仓库
+        run: |
+          git config user.name "crawl-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "无变化" || (git commit -m "auto crawl $(date +%F-%T)" && git push)
