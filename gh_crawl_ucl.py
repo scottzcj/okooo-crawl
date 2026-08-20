@@ -25,12 +25,39 @@ def get(url, referer=None):
     for i in range(5):
         try:
             r = creq.get(url, impersonate="chrome", headers=h, timeout=25)
-            if r.status_code == 200 and "aliyun_waf" not in r.text[:2000]:
+            body = r.text[:2000]
+            print("  [GET %s] status=%s len=%s" % (url[:80], r.status_code, len(r.content)), flush=True)
+            if r.status_code == 200 and "aliyun_waf" not in body:
                 return r.text
-        except Exception:
-            pass
+        except Exception as e:
+            print("  [GET %s] 异常 %s" % (url[:60], str(e)[:60]), flush=True)
         time.sleep(8)
     return None
+
+def get_mobile_matches(month):
+    """移动版月份页兜底: 返回match列表(仅最近3季)"""
+    h = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"}
+    url = "https://m.okooo.com/saishi/7-%s/" % month
+    try:
+        r = creq.get(url, headers=h, timeout=25)
+        s = r.content.decode("gbk", "replace")
+    except Exception:
+        return []
+    rows = []
+    for m in re.finditer(r'MatchID=(\d+)', s):
+        mid = m.group(1)
+        seg = s[max(0, m.start()-800):m.end()+400]
+        teams = re.findall(r'class="team"[^>]*>([^<]+)</a>', seg)
+        date = re.findall(r'class="title">(\d{4}-\d{2}-\d{2})</div>', s[:m.start()])
+        lunci = re.findall(r'class="lunci"[^>]*>([^<]+)</a>', seg)
+        season = "?"
+        lm = re.search(r'lunci-[\d]+-(\d+)-', seg)
+        if lm:
+            season = lm.group(1)
+        if len(teams) >= 2:
+            rows.append({"matchid": mid, "round": lunci[0].strip() if lunci else "", "time": date[-1] if date else "",
+                         "home": teams[0].strip(), "score": "", "away": teams[1].strip(), "season": season, "label": ""})
+    return rows
 
 def get_rounds(league_id, season_id):
     """PC赛程页: 联赛轮次 + 杯赛阶段全部"""
@@ -86,7 +113,25 @@ def main():
                 m["season"] = sid
                 m["label"] = label
             all_matches.extend(ms)
-    print("共找到 %d 场比赛" % len(all_matches), flush=True)
+    print("PC赛程页共找到 %d 场比赛" % len(all_matches), flush=True)
+    # 移动版兜底(3季7月+8月资格赛)
+    for month in ["2024-07", "2024-08", "2025-07", "2025-08", "2026-07", "2026-08"]:
+        ms = get_mobile_matches(month)
+        print("移动版 %s: %d 场" % (month, len(ms)), flush=True)
+        all_matches.extend(ms)
+    # 去重
+    seen, dedup = set(), []
+    for m in all_matches:
+        if m["matchid"] not in seen:
+            seen.add(m["matchid"])
+            dedup.append(m)
+    all_matches = dedup
+    print("去重后共 %d 场比赛" % len(all_matches), flush=True)
+    # 写诊断报告(强制提交, 便于排查)
+    with io.open("report.txt", "w", encoding="utf-8") as f:
+        f.write("matches: %d\n" % len(all_matches))
+        for m in all_matches[:20]:
+            f.write("%s|%s|%s|%s|%s|%s\n" % (m.get("season"), m.get("time"), m.get("home"), m.get("score"), m.get("away"), m.get("matchid")))
     # 写CSV(每赛季每类型)
     for pname, pid, bt in PROVIDERS:
         kind = "初赔" if bt == 1 else "初盘"
